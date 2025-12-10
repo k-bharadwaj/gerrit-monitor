@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Service worker for Manifest V3
+// Event listeners must be registered synchronously at the top level
+
 import * as browser from './browser.js';
 import * as config from './config.js';
 import * as gerrit from './gerrit.js';
@@ -19,6 +22,8 @@ import * as messages from './messages.js';
 import * as notifications from './notifications.js';
 
 // Variable used to cache the results of fetchReviews.
+// Note: In MV3, this cache is cleared when the service worker terminates.
+// For persistent caching, consider using chrome.storage.local.
 var fetchCache = {};
 
 // Fetches information about interesting CLs.
@@ -60,7 +65,7 @@ async function fetchCls(hosts) {
     results: new gerrit.SearchResults(results),
     errors: errors,
   };
-};
+}
 
 async function fetchAndUpdate(hosts) {
   // Fetch results.
@@ -122,18 +127,21 @@ function update(wrapper) {
     updateData = messages.DEFAULT_BADGE_DATA;
 
   browser.updateBadge(updateData);
-};
+}
 
 // Automatically refresh the badge.
-function onAlarm() {
-  browser.loadOptions().then(function(options) {
-    return gerrit.fetchAllowedInstances(options)
-      .then(function(instances) {
-        return fetchAndUpdate(
-            instances.map(function(instance) { return instance.host; }));
-      });
-  }).catch(function(error) { /* do nothing */ });
-};
+async function onAlarm() {
+  try {
+    const options = await browser.loadOptions();
+    const instances = await gerrit.fetchAllowedInstances(options);
+    const hosts = instances.map(function(instance) { return instance.host; });
+    if (hosts.length > 0) {
+      await fetchAndUpdate(hosts);
+    }
+  } catch (error) {
+    console.error('Error in onAlarm:', error);
+  }
+}
 
 // Creates a message listener that turns browser channel message into
 // calls on the given object. All methods must return a promise and
@@ -153,7 +161,7 @@ function newMessageProxy(handler) {
     // the reply will be asynchronous.
     return !hasResponded;
   };
-};
+}
 
 // Handler object for responding to requests from the popup.
 class RequestProxy {
@@ -166,10 +174,43 @@ class RequestProxy {
   }
 }
 
-browser.callWhenLoaded(function() {
-  browser.addExtensionMessageListener(
-      newMessageProxy(new RequestProxy()));
+// ============================================================================
+// SERVICE WORKER EVENT LISTENERS
+// These must be registered synchronously at the top level of the service worker
+// ============================================================================
 
-  chrome.alarms.onAlarm.addListener(onAlarm);
+// Handle messages from popup
+chrome.runtime.onMessage.addListener(newMessageProxy(new RequestProxy()));
+
+// Handle notification clicks (must be registered at top level for MV3)
+// Note: This will only work if the notifications permission is granted
+if (chrome.notifications) {
+  chrome.notifications.onClicked.addListener(browser.notificationClicked);
+}
+
+// Handle alarms for auto-refresh
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'auto-refresh') {
+    onAlarm();
+  }
+});
+
+// Handle service worker installation/startup
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.create('auto-refresh', {
+    delayInMinutes: config.REFRESH_DELAY_IN_MINUTES,
+  });
+  onAlarm();
+});
+
+// Handle service worker startup (e.g., browser restart)
+chrome.runtime.onStartup.addListener(() => {
+  chrome.alarms.get('auto-refresh', (alarm) => {
+    if (!alarm) {
+      chrome.alarms.create('auto-refresh', {
+        delayInMinutes: config.REFRESH_DELAY_IN_MINUTES,
+      });
+    }
+  });
   onAlarm();
 });

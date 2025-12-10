@@ -660,6 +660,17 @@ export function fetchReviews(host, account) {
 // including those that have no permissions granted.
 export async function fetchAllInstances(options) {
   var permissions = await browser.getGrantedPermissions();
+
+  // In MV3, check for broad wildcard host_permissions
+  var hasAllHttps = permissions.origins && (
+    permissions.origins.includes('https://*/') ||
+    permissions.origins.includes('https://*/*')
+  );
+  var hasAllHttp = permissions.origins && (
+    permissions.origins.includes('http://*/') ||
+    permissions.origins.includes('http://*/*')
+  );
+
   return options.instances
       .map(instance => {
         // Version of the extension prior to 0.7.7 allowed instance.host
@@ -669,10 +680,18 @@ export async function fetchAllInstances(options) {
         var match = config.ORIGIN_REGEXP.exec(instance.host);
         if (match !== null) {
           var origin = match[1] + "/*";
+          var protocol = instance.host.startsWith('https://') ? 'https' : 'http';
+
+          // Check if permission is granted either by exact origin match
+          // or by wildcard host_permissions
+          var hasPermission = (permissions.origins && permissions.origins.includes(origin)) ||
+                              (protocol === 'https' && hasAllHttps) ||
+                              (protocol === 'http' && hasAllHttp);
+
           return {
             host: match[0],
             name: instance.name,
-            enabled: instance.enabled && permissions.origins.includes(origin),
+            enabled: instance.enabled && hasPermission,
           }
         } else {
           return null;
