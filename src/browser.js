@@ -30,13 +30,13 @@ export function displayLoading() {
 // Updates the specified properties of the badge.
 export function updateBadge(data) {
   if ('icon' in data)
-    chrome.browserAction.setIcon({ path: data.icon });
+    chrome.action.setIcon({ path: data.icon });
   if ('text' in data)
-    chrome.browserAction.setBadgeText({ text: data.text });
+    chrome.action.setBadgeText({ text: data.text });
   if ('title' in data)
-    chrome.browserAction.setTitle({ title: data.title });
+    chrome.action.setTitle({ title: data.title });
   if ('color' in data)
-    chrome.browserAction.setBadgeBackgroundColor({ color: data.color });
+    chrome.action.setBadgeBackgroundColor({ color: data.color });
 };
 
 // Returns the DOM element with the given id.
@@ -67,53 +67,46 @@ export class FetchError {
 }
 
 // Returns a promise that will resolve to the content of the given path.
-export function fetchUrl(path, params, headers) {
-  return new Promise(function(resolve, reject) {
-    var xhr = new XMLHttpRequest();
-    if (params) {
-      var separator = '?';
-      params.forEach(function(param) {
-        var key = encodeURIComponent(String(param[0]));
-        var val = encodeURIComponent(String(param[1]));
-        path += separator + key + '=' + val;
-        separator = '&';
-      });
-    }
-    xhr.open('GET', path, true);
-    if (headers) {
-      utils.Map.wrap(headers).forEach(function(key, value) {
-        xhr.setRequestHeader(key, value);
-      });
-    }
-    xhr.onreadystatechange = function() {
-      if (xhr.readyState != 4)
-        return;
+export async function fetchUrl(path, params, headers) {
+  // Build URL with query parameters
+  if (params) {
+    var separator = '?';
+    params.forEach(function(param) {
+      var key = encodeURIComponent(String(param[0]));
+      var val = encodeURIComponent(String(param[1]));
+      path += separator + key + '=' + val;
+      separator = '&';
+    });
+  }
 
-      if (xhr.status == 200) {
-        resolve(xhr.responseText);
-      } else if (xhr.statusText == 'OK') {
-        // The error message is in the response body. Those are likely
-        // auth-related issues, so add login prompt.
-        reject(new FetchError(xhr.responseText + config.LOGIN_PROMPT,
-          true));
-      } else if (xhr.status >= 400 && xhr.status <= 403) {
-        // Authentication error, offer login.
-        reject(
-          new FetchError("HTTP " + xhr.status + config.LOGIN_PROMPT,
-            true));
-      } else if (xhr.statusText == '' && xhr.status == 0) {
-        // No error text and a status of 0 usually indicate a missing
-        // cookie (e.g., a redirect to a sign-in service, which fails
-        // the request due to Chrome's CORS restrictions). Add login prompt.
-        reject(new FetchError('Unknown error.' + config.LOGIN_PROMPT,
-          true));
-      } else {
-        reject(new FetchError("HTTP " + xhr.status, false));
-      }
-    };
-    xhr.send(null);
-  });
-};
+  // Build fetch options
+  const fetchOptions = {
+    method: 'GET',
+    credentials: 'include', // Include cookies for authentication
+    headers: headers || {},
+  };
+
+  try {
+    const response = await fetch(path, fetchOptions);
+
+    if (response.ok) {
+      return await response.text();
+    } else if (response.status >= 400 && response.status <= 403) {
+      // Authentication error, offer login.
+      throw new FetchError("HTTP " + response.status + config.LOGIN_PROMPT, true);
+    } else {
+      throw new FetchError("HTTP " + response.status, false);
+    }
+  } catch (error) {
+    if (error instanceof FetchError) {
+      throw error;
+    }
+    // Network errors or CORS failures
+    // These usually indicate a missing cookie (e.g., a redirect to a sign-in
+    // service, which fails the request due to Chrome's CORS restrictions).
+    throw new FetchError('Unknown error.' + config.LOGIN_PROMPT, true);
+  }
+}
 
 // Sends a browser message, returning a promise for the result.
 export function sendExtensionMessage(args, callback) {
@@ -152,7 +145,10 @@ export function openUrl(urlString, reuse_if_possible) {
       if (active.length != 0) {
         // If the active tab already present the given url, just close
         // the popup (as the activation will not close it automatically).
-        window.close();
+        // Note: window.close() only works in popup context, not service worker.
+        if (typeof window !== 'undefined' && window.close) {
+          window.close();
+        }
       } else {
         chrome.tabs.update(candidates[0].id, { active: true }, function(tab) {
           // nothing to do.
@@ -186,6 +182,10 @@ export function saveOptions(options) {
       }
     });
     chrome.storage.sync.set(options_with_defaults, function() {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+        return;
+      }
       resolve(options_with_defaults);
     });
   });
@@ -229,49 +229,38 @@ export async function requestPermissions(origins, notifications) {
   var permissions = await getGrantedPermissions();
   var notifications_granted = permissions.permissions.includes('notifications');
 
-  var permissions_removal = {origins: [], permissions: []};
-  if (permissions.origins) {
-    permissions_removal.origins = permissions.origins
-        .filter(origin => { return !origins.includes(origin); });
-  }
-  if (!notifications && notifications_granted) {
-    permissions_removal.permissions.push('notifications');
-  }
+  // In Manifest V3, host_permissions declared in manifest are already granted.
+  // We only need to handle notifications as an optional permission.
+  // Skip origin permission management since they're in host_permissions.
 
-  if (!permissionChangeEmpty(permissions_removal)) {
-    await new Promise(function(resolve, reject) {
-      chrome.permissions.remove(permissions_removal, function(removed) {
-        if (!removed) {
-          reject(new Error("cannot drop permissions"));
-          return;
-        }
-
-        resolve();
-      })
-    });
-  }
-
-  var permissions_request = {origins: origins, permissions: []};
-  if (permissions.origins) {
-    permissions_request.origins = origins
-        .filter(origin => { return !permissions.origins.includes(origin); });
-  }
-
+  // Handle notification permission
   if (notifications && !notifications_granted) {
-    permissions_request.permissions.push('notifications');
-  }
-
-  if (!permissionChangeEmpty(permissions_request)) {
     await new Promise(function(resolve, reject) {
-      chrome.permissions.request(permissions_request, function(granted) {
-        if (!granted) {
-          reject(new Error("permissions not granted"));
+      chrome.permissions.request({permissions: ['notifications']}, function(granted) {
+        if (chrome.runtime.lastError) {
+          console.warn('Notification permission request failed:', chrome.runtime.lastError.message);
+          reject(new Error("notifications permission not granted"));
           return;
         }
-
+        if (!granted) {
+          reject(new Error("notifications permission not granted"));
+          return;
+        }
         resolve();
       });
     });
+  } else if (!notifications && notifications_granted) {
+    // Try to remove notification permission if user disabled it
+    try {
+      await new Promise(function(resolve) {
+        chrome.permissions.remove({permissions: ['notifications']}, function(removed) {
+          // Don't fail if we can't remove - just continue
+          resolve();
+        });
+      });
+    } catch (error) {
+      // Ignore errors when removing permissions
+    }
   }
 }
 
@@ -285,21 +274,16 @@ export function openOptionsPage() {
 // The "url" parameter is used as the notification ID, and will be navigated to when
 // the notification is clicked on.
 export function createNotification(url, options) {
-  // Register for notifications if we haven't already.
-  //
-  // We need to do this lazily, because "chrome.notifications" won't exist if we
-  // don't have notification permissions.
-  if (!chrome.notifications.onClicked.hasListener(notificationClicked)) {
-    chrome.notifications.onClicked.addListener(notificationClicked);
-  }
-
+  // Note: In MV3, the notification click listener is registered in badge.js
+  // at the top level of the service worker to ensure it survives restarts.
   chrome.notifications.create(url, options);
 }
 
 // Handle a click to a notification.
 //
 // When a notification is clicked, open a URL and clear the notification.
-function notificationClicked(url) {
+// This is exported so badge.js can register it as a listener.
+export function notificationClicked(url) {
   openUrl(url, true);
   chrome.notifications.clear(url);
 }
