@@ -1,56 +1,70 @@
-# Chrome extension to monitor gerrit code review
+# Gerrit Monitor - Chrome Extension
 
-This repository contains source code for the [Chrome Gerrit Monitor][1]
-extension.
+A Chrome extension to monitor your code reviews on Gerrit.
 
-## About the extension
+> **Fork Notice**: This is a fork of [sdefresne/gerrit-monitor](https://github.com/sdefresne/gerrit-monitor), updated to support Chrome Manifest V3.
 
-This is the first Chrome extension I've ever wrote, so I would not
-recommend using it as an example on how to write a good extension.
+## About
 
-The extension polls the gerrit servers registered every five minutes
-and update the extension badge. On click, it also polls the server to
-display the popup (and refresh the badge).
+Gerrit Monitor helps you stay on top of your code reviews by:
 
-This extension has been developed primarily for my work on Chromium,
-so it should work as provided for this gerrit installation. It may
-fail for other server, especially if they have not enabled the JSON
-rest API.
+- Polling configured Gerrit servers every 5 minutes
+- Displaying a badge with the number of CLs requiring your attention
+- Showing categorized CLs in a popup (incoming reviews, outgoing needing attention, ready to submit, etc.)
+- Sending optional desktop notifications for CLs that need your attention
 
-The extension tries to limit as much as possible the permission that
-it requests. By default, it needs no permission, and will request the
-permission to access pages from gerrit servers the user has configured.
+## Version 2.0.0 - Manifest V3 Migration
+
+This version includes a required migration to Chrome Manifest V3 with below changes:
+
+- **Service Worker**: Replaced persistent background page with a module-based service worker
+- **APIs**: `chrome.browserAction` ->  `chrome.action`, XMLHttpRequest -> Fetch API
+- **Alarm-based Polling**: Uses `chrome.alarms` for periodic refresh
+- **Proper Event Handling**: All event listeners registered at service worker top level
 
 ## Installation
 
-The simplest way to install the extension is to visit the Chrome Web
-Store and click the install button.
+{WIP}: Extension in the Chrome Web Store.
 
-If you want to develop the extension, then you can check out this repo,
-navigation to chrome://extensions, and use the "Load unpacked" to point
-to the checkout `src/` directory.
+### From Source (Development)
 
-To deploy, you can use the `deploy.py` script or use the "Pack extension"
-button from chrome://extensions.
+1. Clone this repository
+2. Navigate to `chrome://extensions` in Chrome
+3. Enable "Developer mode"
+4. Click "Load unpacked" and select the `src/` directory
+
+### Packaging
+
+To deploy, you can use the `deploy.py` script or use the "Pack extension" button from `chrome://extensions`.
 
 ## Setup
 
-Installing Gerrit Monitor is not enough to start getting push notifications;
-you need to configure the extension for all Gerrit hosts that interest you.
+After installing the extension:
 
-After downloading the extension, click on it and click the button
-saying "Grant permissions".
+1. Click on the extension icon
+2. Click "Grant permissions" if prompted
+3. Go to the Options page to configure your Gerrit instances
 
-![grant permissions button](store/initial_download_grant_permissions.png)
+### Configuring Gerrit Hosts
 
-From here, a page will load where you can enable any Gerrit instances that
-interest you. Click the checkbox on the "Enabled?" column to enable Chromium
-or Fuchsia, or custom add additional instances using the boxes at the bottom.
+From the options page, you can:
+
+- Enable/disable pre-configured Gerrit instances (Chromium, Fuchsia, AOSP)
+- Add custom Gerrit instances by providing a name and host URL
 
 ![Configure hosts](store/configure_hosts.png)
 
-Attention Set support in Gerrit Monitor is experimental. If interested, switch
-either or both boxes to "Enabled".
+### Notifications
+
+Enable desktop notifications to be alerted when:
+
+- Incoming CLs require your attention
+- Your outgoing CLs need action
+- CLs are approved and ready to submit
+
+### Attention Set
+
+Gerrit Monitor supports the Attention Set feature. Configure this in the options to rely solely on Gerrit's attention set for determining which CLs need your attention.
 
 ![Configure Attention Set](store/configure_attention_set.png)
 
@@ -83,4 +97,3 @@ Apache header:
 
 This is not an officially supported Google product.
 
-[1]: https://chrome.google.com/webstore/detail/gerrit-monitor/leakcdjcdifiihdgalplgkghidmfafoh
